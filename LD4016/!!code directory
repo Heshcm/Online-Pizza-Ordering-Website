@@ -1,0 +1,3548 @@
+accept_order.php: 
+<?php
+session_start();
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== 'admin') {
+    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    exit();
+}
+
+include 'db_connection.php'; // Include your DB connection script
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $order_id = $_POST['order_id'];
+
+    // Update the status of the order to 'processing'
+    $stmt = $conn->prepare("UPDATE Orders SET status = 'processing' WHERE id = ?");
+    $stmt->bind_param("i", $order_id);
+
+    if ($stmt->execute()) {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Database update failed']);
+    }
+
+    $stmt->close();
+    $conn->close();
+} else {
+    echo json_encode(['success' => false, 'message' => 'Invalid request']);
+}
+?>
+
+admin_header.php:
+<?php
+session_start(); // Start the session
+
+// Check if the user is an admin, otherwise redirect to the home page
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== 'admin') {
+    header("Location: index.php");
+    exit();
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Delicious Pizza</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Correct Font Awesome link -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <header>
+        <div class="logo"></div>
+        <nav>
+            <ul>
+                <li><a href="new_orders.php">New Orders</a></li>
+                <li><a href="current_orders.php">Current Orders</a></li>
+                <li><a href="previous_orders.php">Previous orders</a></li>
+                <li class="my-account">
+                    <a href="#">My account</a>
+                    <div class="account-dropdown">
+                        <a href="#" class="logout-btn" style="background-color: red; color: white;">Logout</a>
+                    </div>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <script>
+        // Ensure logout confirmation and sign-in state management
+        document.addEventListener('DOMContentLoaded', function() {
+            const logoutBtn = document.querySelector('.logout-btn');
+
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    if (confirm('Are you sure you want to log out?')) {
+                        window.location.href = 'logout.php';
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
+cart.js:
+document.addEventListener('DOMContentLoaded', function () {
+    attachCartQuantityListeners();
+
+    function attachCartQuantityListeners() {
+        document.querySelectorAll('.cart-container .quantity-btn').forEach(button => {
+            button.addEventListener('click', function () {
+                const isIncrement = button.classList.contains('increment');
+                const quantityElement = button.parentElement.querySelector('.quantity');
+                let currentQuantity = parseInt(quantityElement.textContent);
+                const itemName = button.dataset.item;
+                const priceElement = button.closest('.cart-item').querySelector('.item-price');
+                const unitPrice = parseFloat(priceElement.dataset.unitPrice); // Original price per item
+
+                // Adjust the quantity
+                if (isIncrement) {
+                    currentQuantity++;
+                } else if (currentQuantity > 1) {
+                    currentQuantity--;
+                } else if (currentQuantity === 1 && !isIncrement) {
+                    const cartItem = button.closest('.cart-item');
+                    cartItem.parentNode.removeChild(cartItem);
+
+                    // Send request to remove the item from the cart
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", "update_cart.php", true);
+                    xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                    xhr.onreadystatechange = function () {
+                        if (xhr.readyState === 4 && xhr.status === 200) {
+                            updateCartSummary();
+                        }
+                    };
+                    xhr.send(`action=update&item=${encodeURIComponent(itemName)}&quantity=0`);
+                    return;
+                }
+
+                // Update the quantity display
+                quantityElement.textContent = currentQuantity;
+
+                // Update the price in the DOM
+                const updatedPrice = (unitPrice * currentQuantity).toFixed(2);
+                priceElement.textContent = `£${updatedPrice}`;
+
+                // Update the quantity in the session via AJAX
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", "update_cart.php", true);
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState === 4 && xhr.status === 200) {
+                        updateCartSummary();
+                    }
+                };
+                xhr.send(`action=update&item=${encodeURIComponent(itemName)}&quantity=${encodeURIComponent(currentQuantity)}`);
+            });
+        });
+    }
+
+    function updateCartSummary() {
+        let subtotal = 0;
+        document.querySelectorAll('.cart-item').forEach(item => {
+            const priceElement = item.querySelector('.item-price');
+            const price = parseFloat(priceElement.textContent.replace('£', ''));
+            subtotal += price;
+        });
+
+        const vat = subtotal * 0.2; // 20% VAT
+        const total = subtotal + vat;
+
+        document.querySelector('.subtotal span:last-child').textContent = `£${subtotal.toFixed(2)}`;
+        document.querySelector('.vat span:last-child').textContent = `£${vat.toFixed(2)}`;
+        document.querySelector('.total span:last-child').textContent = `£${total.toFixed(2)}`;
+    }
+
+    // Function to handle checkout
+    function handleCheckout() {
+        // Check if the cart is empty
+        const cartIsEmpty = document.querySelectorAll('.cart-item').length === 0;
+
+        if (cartIsEmpty) {
+            // If the cart is empty, show an error modal
+            document.getElementById('emptyCartModal').style.display = 'block';
+        } else if (!isUserSignedIn) {
+            // If the cart is not empty but the user is not signed in, show the sign-in modal
+            document.getElementById('authModal').style.display = 'block';
+        } else {
+            // If the user is signed in and the cart is not empty, redirect to the checkout page
+            window.location.href = 'checkout.php';
+        }
+    }
+
+    // Attach the function to the checkout button
+    document.querySelector('.checkout-btn').addEventListener('click', handleCheckout);
+});
+
+cart.php:
+<?php
+session_start();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cart - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+    
+    <main class="cart-container">
+        <h2 class="cart-title">Order Details</h2>
+
+        <?php if (!empty($_SESSION['cart'])): ?>
+            <?php foreach ($_SESSION['cart'] as $item => $details): ?>
+                <div class="cart-item">
+                    <div class="item-details">
+                        <?php if (strpos($item, 'custom_pizza_') === 0): ?>
+                            <div class="custom-pizza-details">
+                                <span class="item-name">Custom Pizza</span>
+                                <div class="ingredients-list">
+                                    <small>Base: <?php echo htmlspecialchars($details['details']['base']); ?></small><br>
+                                    <?php if (!empty($details['details']['cheeses'])): ?>
+                                        <small>Cheeses: <?php echo implode(', ', array_map('htmlspecialchars', $details['details']['cheeses'])); ?></small><br>
+                                    <?php endif; ?>
+                                    <?php if (!empty($details['details']['meats'])): ?>
+                                        <small>Meats: <?php echo implode(', ', array_map('htmlspecialchars', $details['details']['meats'])); ?></small><br>
+                                    <?php endif; ?>
+                                    <?php if (!empty($details['details']['vegetables'])): ?>
+                                        <small>Vegetables: <?php echo implode(', ', array_map('htmlspecialchars', $details['details']['vegetables'])); ?></small><br>
+                                    <?php endif; ?>
+                                    <?php if (!empty($details['details']['toppings'])): ?>
+                                        <small>Toppings: <?php echo implode(', ', array_map('htmlspecialchars', $details['details']['toppings'])); ?></small>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php else: ?>
+                            <span class="item-name"><?php echo htmlspecialchars($item); ?></span>
+                        <?php endif; ?>
+                        <div class="quantity-controls">
+                            <button class="quantity-btn decrement" data-item="<?php echo htmlspecialchars($item); ?>">-</button>
+                            <span class="quantity"><?php echo $details['quantity']; ?></span>
+                            <button class="quantity-btn increment" data-item="<?php echo htmlspecialchars($item); ?>">+</button>
+                        </div>
+                    </div>
+                    <div class="item-price-box">
+                        <span class="item-price" data-unit-price="<?php echo htmlspecialchars($details['price']); ?>">
+                            £<?php echo number_format($details['price'] * $details['quantity'], 2); ?>
+                        </span>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        <?php else: ?>
+            <p>Your cart is empty.</p>
+        <?php endif; ?>
+
+        <div class="cart-summary">
+            <div class="subtotal">
+                <span>Subtotal</span>
+                <span>£<?php echo number_format(array_sum(array_map(function ($item) {
+                    return $item['price'] * $item['quantity'];
+                }, $_SESSION['cart'])), 2); ?></span>
+            </div>
+            <div class="coupon">
+                <input type="text" placeholder="Have a coupon?">
+            </div>
+            <div class="vat">
+                <span>+20% VAT</span>
+                <span>£<?php echo number_format(array_sum(array_map(function ($item) {
+                    return $item['price'] * $item['quantity'];
+                }, $_SESSION['cart'])) * 0.2, 2); ?></span>
+            </div>
+            <div class="total">
+                <span>Order Total:</span>
+                <span>£<?php echo number_format(array_sum(array_map(function ($item) {
+                    return $item['price'] * $item['quantity'];
+                }, $_SESSION['cart'])) * 1.2, 2); ?></span>
+            </div>
+        </div>
+
+        <button class="checkout-btn">Proceed to Checkout</button>
+    </main>
+
+    <!-- Embed the script defining `isUserSignedIn` before `cart.js` -->
+    <script>
+    // Embed PHP inside JavaScript to pass user sign-in status
+    let isUserSignedIn = <?php echo isset($_SESSION['user_id']) ? 'true' : 'false'; ?>;
+    </script>
+    <script src="cart.js"></script> <!-- Load the cart.js after defining `isUserSignedIn` -->
+
+    <!-- Empty Cart Modal -->
+    <div id="emptyCartModal" class="empty-cart-modal">
+        <div class="empty-cart-modal-content">
+            <div class="empty-cart-modal-header">
+                <span class="close-empty-cart-modal">&times;</span>
+                <h2>Cart is Empty</h2>
+            </div>
+            <p>Please add some items from the menu to proceed.</p>
+            <button class="close-empty-cart-btn">Close</button>
+        </div>
+    </div>
+
+    <!-- Sign-In Modal -->
+    <div id="authModal" class="auth-modal">
+        <div class="auth-modal-content">
+            <div class="auth-modal-header">
+                <span class="close-auth-modal">&times;</span>
+                <h2 id="authModalTitle">Sign in to Proceed to Checkout</h2>
+            </div>
+            <div class="auth-modal-body" id="authModalBody">
+                <div class="auth-section" id="signInSection">
+                    <h3>Enter your log-in credentials to proceed to checkout</h3>
+                    <form id="signInForm">
+                        <input type="text" name="username" placeholder="Username / E-mail address" required>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="button" class="auth-btn" onclick="handleLogin()">Sign in</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript for AJAX login -->
+    <script>
+        function handleLogin() {
+            const form = document.getElementById('signInForm');
+            const formData = new FormData(form);
+
+            // AJAX request to login.php
+            fetch('login.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    isUserSignedIn = true; // Update the signed-in status
+                    document.getElementById('authModal').style.display = 'none'; // Close the sign-in modal
+
+                    // Update the UI for the dropdown to show "Logout"
+                    document.querySelector('.my-account .sign-in-btn').textContent = 'Logout';
+                    document.querySelector('.my-account .sign-in-btn').classList.add('logout-btn');
+                    document.querySelector('.my-account .sign-in-btn').classList.remove('sign-in-btn');
+                    
+                    // Optionally redirect to the checkout page
+                    window.location.href = 'checkout.php';
+                } else {
+                    alert('Login failed. Please check your credentials and try again.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        // Event listener for the checkout button
+        document.querySelector('.checkout-btn').addEventListener('click', function() {
+            // Check if the cart is empty
+            const cartIsEmpty = document.querySelectorAll('.cart-item').length === 0;
+
+            if (cartIsEmpty) {
+                // Show the empty cart modal if the cart is empty
+                document.getElementById('emptyCartModal').style.display = 'block';
+            } else if (!isUserSignedIn) {
+                // Show the sign-in modal if the user is not signed in
+                document.getElementById('authModal').style.display = 'block';
+            } else {
+                // Proceed to the checkout page
+                window.location.href = 'checkout.php';
+            }
+        });
+
+        // Close modal functionality
+        document.querySelector('.close-empty-cart-modal').addEventListener('click', function() {
+            document.getElementById('emptyCartModal').style.display = 'none';
+        });
+        document.querySelector('.close-empty-cart-btn').addEventListener('click', function() {
+            document.getElementById('emptyCartModal').style.display = 'none';
+        });
+        document.querySelector('.close-auth-modal').addEventListener('click', function() {
+            document.getElementById('authModal').style.display = 'none';
+        });
+    </script>
+
+</body>
+</html>
+
+checkout.js:
+document.addEventListener('DOMContentLoaded', function() {
+    const deliveryBtn = document.getElementById('delivery-btn');
+    const pickupBtn = document.getElementById('pickup-btn');
+    const deliveryAddressSection = document.getElementById('delivery-address');
+    const proceedToPaymentBtn = document.getElementById('proceed-to-payment-btn');
+    const paymentSection = document.getElementById('payment-section');
+
+    // When "Delivery" is clicked, show the address section
+    deliveryBtn.addEventListener('click', function() {
+        deliveryAddressSection.style.display = 'block';
+        paymentSection.style.display = 'none';
+    });
+
+    // When "Pickup" is clicked, proceed directly to payment
+    pickupBtn.addEventListener('click', function() {
+        deliveryAddressSection.style.display = 'none';
+        paymentSection.style.display = 'block';
+    });
+
+    // When "Proceed to Payment" is clicked, show the payment section
+    proceedToPaymentBtn.addEventListener('click', function() {
+        paymentSection.style.display = 'block';
+    });
+});
+
+checkout.php:
+<?php
+session_start();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+    <main class="checkout-container">
+        <h2 class="checkout-title">Checkout</h2>
+
+        <!-- Step 1: Delivery or Pickup -->
+        <div class="checkout-step">
+            <h3>Would you like your order to be delivered or picked up?</h3>
+            <div class="option-buttons">
+                <button class="option-btn" id="pickupBtn">Pick Up</button>
+                <button class="option-btn" id="deliveryBtn">Delivery</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Delivery Address (appears only if Delivery is selected) -->
+        <div id="deliveryAddress" class="hidden">
+            <h3>Delivery Address</h3>
+            <form id="addressForm">
+                <input type="text" id="streetAddress" name="address" placeholder="Street Address" required>
+                <input type="text" id="city" name="city" placeholder="City" required>
+                <input type="text" id="postcode" name="postcode" placeholder="Postcode" required>
+                <button type="button" class="proceed-btn" id="proceedToPaymentBtn">Proceed to Payment</button>
+            </form>
+        </div>
+
+        <!-- Step 3: Payment (appears after "Proceed to Payment" is clicked) -->
+        <div id="paymentDetails" class="hidden">
+            <h3>Payment Details</h3>
+            <form id="paymentForm" method="POST">
+                <input type="text" name="cardName" placeholder="Name on Card" required>
+                <input type="text" name="cardNumber" placeholder="Card Number" required>
+                <input type="text" name="expiryDate" placeholder="Expiry Date (MM/YY)" required>
+                <input type="text" name="cvv" placeholder="CVV" required>
+                <button type="button" class="checkout-btn" id="checkoutBtn">Checkout</button>
+            </form>
+        </div>
+    </main>
+
+    <script>
+        let isDelivery = false; // To keep track of the selected option
+
+        // Handle the visibility of address and payment forms
+        document.getElementById('deliveryBtn').addEventListener('click', function() {
+            document.getElementById('deliveryAddress').classList.remove('hidden');
+            document.getElementById('paymentDetails').classList.add('hidden');
+            isDelivery = true;
+        });
+
+        document.getElementById('pickupBtn').addEventListener('click', function() {
+            document.getElementById('deliveryAddress').classList.add('hidden');
+            document.getElementById('paymentDetails').classList.remove('hidden');
+            isDelivery = false;
+        });
+
+        document.getElementById('proceedToPaymentBtn').addEventListener('click', function() {
+            const street = document.getElementById('streetAddress').value;
+            const city = document.getElementById('city').value;
+            const postcode = document.getElementById('postcode').value;
+
+            // Check if all address fields are filled
+            if (street && city && postcode) {
+                document.getElementById('paymentDetails').classList.remove('hidden');
+            } else {
+                alert('Please fill in all the address fields before proceeding to payment.');
+            }
+        });
+
+        // Handle Checkout button click
+        document.getElementById('checkoutBtn').addEventListener('click', function() {
+            const paymentForm = document.getElementById('paymentForm');
+            const formData = new FormData(paymentForm);
+
+            if (isDelivery) {
+                const street = document.getElementById('streetAddress').value;
+                const city = document.getElementById('city').value;
+                const postcode = document.getElementById('postcode').value;
+                formData.append('delivery_address', `${street}, ${city}, ${postcode}`);
+            } else {
+                formData.append('delivery_address', 'Pickup'); // Mark as pickup if delivery is not chosen
+            }
+
+            // AJAX request to save the order and redirect
+            fetch('save_order.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Redirect based on selection
+                    if (isDelivery) {
+                        window.location.href = 'confirmation_delivery.php'; // Redirect to delivery confirmation page
+                    } else {
+                        window.location.href = 'confirmation_pickup.php'; // Redirect to pickup confirmation page
+                    }
+                } else {
+                    alert('Error: Unable to process the order.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        });
+    </script>
+</body>
+</html>
+
+confirmation_delivery.php:
+<?php
+session_start();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Confirmation - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+    <main class="confirmation-container">
+        <div class="order-placed">
+            <img src="images/check-icon.png" alt="Order Placed" class="confirmation-icon">
+            <h2>Order placed</h2>
+        </div>
+
+        <div class="order-status">
+            <h3>Order Status:</h3>
+            <div class="status-steps">
+                <div class="status-step">
+                    <img src="images/restaurant-accepted.png" alt="Restaurant Accepted">
+                    <p>Restaurant has accepted your order</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-preparing.png" alt="Order Preparing">
+                    <p>Your order is being prepared</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-ready1.png" alt="Order Ready1">
+                    <p>Your order is on its way</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-picked.png" alt="Order Picked">
+                    <p>Order delivered</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="help-section">
+            <h3>Need help with your order?</h3>
+            <a href="contactus.php" class="contact-btn">Contact us</a>
+        </div>
+    </main>
+</body>
+</html>
+
+confirmation_pickup.php:
+<?php
+session_start();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Confirmation - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+    <main class="confirmation-container">
+        <div class="order-placed">
+            <img src="images/check-icon.png" alt="Order Placed" class="confirmation-icon">
+            <h2>Order placed</h2>
+        </div>
+
+        <div class="order-status">
+            <h3>Order Status:</h3>
+            <div class="status-steps">
+                <div class="status-step">
+                    <img src="images/restaurant-accepted.png" alt="Restaurant Accepted">
+                    <p>Restaurant has accepted your order</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-preparing.png" alt="Order Preparing">
+                    <p>Your order is being prepared</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-ready.png" alt="Order Ready">
+                    <p>Your order is ready for pickup</p>
+                </div>
+                <div class="status-step">
+                    <img src="images/order-picked.png" alt="Order Picked">
+                    <p>Order picked up</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="help-section">
+            <h3>Need help with your order?</h3>
+            <a href="contactus.php" class="contact-btn">Contact us</a>
+        </div>
+    </main>
+</body>
+</html>
+
+contactUs.php:
+<?php
+session_start(); // Start the session to access session variables
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Us - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+
+    <main>
+        <section class="faq-section">
+            <h1>Frequently Asked Questions</h1>
+            
+            <div class="faq-item">
+                <h2>What are your opening hours?</h2>
+                <p>We are open Monday to Friday from 11:00 AM to 10:00 PM, and Saturday and Sunday from 12:00 PM to 11:00 PM. We also offer delivery during these hours, so you can enjoy our delicious pizza wherever you are!</p>
+            </div>
+
+            <div class="faq-item">
+                <h2>Do you offer gluten-free or vegan options?</h2>
+                <p>Yes, we do! We offer a range of gluten-free pizzas and vegan options. Our gluten-free pizzas are made with a special crust, and our vegan pizzas feature dairy-free cheese and a variety of fresh, plant-based toppings. Please inform us of any allergies or dietary requirements when placing your order.</p>
+            </div>
+        </section>
+
+        <section class="contact-form-section">
+            <h1>Reach out to us</h1>
+            <form>
+                <div class="form-group">
+                    <div class="form-field">
+                        <label for="first-name">First name</label>
+                        <input type="text" id="first-name" name="first-name">
+                    </div>
+                    <div class="form-field">
+                        <label for="last-name">Last name</label>
+                        <input type="text" id="last-name" name="last-name">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="email">E-mail address</label>
+                    <input type="email" id="email" name="email">
+                </div>
+                
+                <div class="form-group">
+                    <label for="message">Your message</label>
+                    <textarea id="message" name="message" rows="5"></textarea>
+                </div>
+                
+
+                <button type="submit" class="submit-btn">Send message</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>
+
+current_orders.php:
+<?php
+session_start();
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== 'admin') {
+    header("Location: index.php"); // Redirect to homepage if not admin
+    exit();
+}
+
+include 'db_connection.php'; // Include your DB connection script
+
+// Fetch current orders from the database where the status is 'processing', 'preparing', 'ready for pickup', or 'on its way'
+$query = "SELECT * FROM Orders WHERE status IN ('processing', 'preparing', 'ready for pickup', 'on its way')";
+$result = $conn->query($query);
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Current Orders - Delicious Pizza Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'admin_header.php'; ?> <!-- Admin-specific header -->
+
+    <main>
+        <h2>Current Orders</h2>
+
+        <?php if ($result->num_rows > 0): ?>
+            <?php while ($order = $result->fetch_assoc()): ?>
+                <div class="order" id="order-<?php echo $order['id']; ?>">
+                    <div class="order-header">
+                        <h3>Order #<?php echo $order['id']; ?></h3>
+                        <p><?php echo $order['created_at']; ?></p>
+                    </div>
+                    <div class="order-details">
+                        <p><strong>Order Total:</strong> £<?php echo number_format($order['total_price'], 2); ?></p>
+                        <p><strong>Delivery Address:</strong> <?php echo $order['delivery_address']; ?></p>
+                    </div>
+                    <!-- Button based on order status -->
+                    <?php if ($order['status'] === 'processing'): ?>
+                        <button class="status-btn" onclick="updateOrderStatus(<?php echo $order['id']; ?>, 'preparing', '<?php echo $order['delivery_address']; ?>')">Preparing</button>
+                    <?php elseif ($order['status'] === 'preparing' && $order['delivery_address'] === 'Pickup'): ?>
+                        <button class="status-btn" onclick="updateOrderStatus(<?php echo $order['id']; ?>, 'ready for pickup', 'Pickup')">Ready for Pickup</button>
+                    <?php elseif ($order['status'] === 'preparing' && $order['delivery_address'] !== 'Pickup'): ?>
+                        <button class="status-btn" onclick="updateOrderStatus(<?php echo $order['id']; ?>, 'on its way', 'Delivery')">On Its Way</button>
+                    <?php elseif ($order['status'] === 'ready for pickup'): ?>
+                        <button class="status-btn" onclick="updateOrderStatus(<?php echo $order['id']; ?>, 'picked up', 'Pickup')">Picked Up</button>
+                    <?php elseif ($order['status'] === 'on its way'): ?>
+                        <button class="status-btn" onclick="updateOrderStatus(<?php echo $order['id']; ?>, 'delivered', 'Delivery')">Delivered</button>
+                    <?php endif; ?>
+                </div>
+            <?php endwhile; ?>
+        <?php else: ?>
+            <p>No current orders at the moment.</p>
+        <?php endif; ?>
+
+        <?php $conn->close(); ?>
+    </main>
+
+<script>
+    // Function to update the order status dynamically
+    function updateOrderStatus(orderId, nextStatus, orderType) {
+        // AJAX request to update the order status in the database
+        fetch('update_order_status.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `order_id=${orderId}&status=${nextStatus}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Update the button text or remove the order
+                const orderElement = document.getElementById(`order-${orderId}`);
+                if (nextStatus === 'preparing') {
+                    const newStatus = orderType === 'Pickup' ? 'ready for pickup' : 'on its way';
+                    orderElement.querySelector('.status-btn').textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+                    orderElement.querySelector('.status-btn').setAttribute('onclick', `updateOrderStatus(${orderId}, '${newStatus}', '${orderType}')`);
+                } else if (nextStatus === 'ready for pickup' || nextStatus === 'on its way') {
+                    const finalStatus = nextStatus === 'ready for pickup' ? 'picked up' : 'delivered';
+                    orderElement.querySelector('.status-btn').textContent = finalStatus.charAt(0).toUpperCase() + finalStatus.slice(1);
+                    orderElement.querySelector('.status-btn').setAttribute('onclick', `updateOrderStatus(${orderId}, '${finalStatus}', '${orderType}')`);
+                } else {
+                    // Remove from current orders and move to previous orders page
+                    orderElement.remove();
+                    // Optionally, you could also use AJAX to append it to the 'previous orders' page if dynamic loading is desired
+                }
+            } else {
+                alert(data.message || 'Error updating order status.');
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    }
+</script>
+
+</body>
+</html>
+
+db_connection.php:
+<?php
+$servername = "localhost";
+$username = "root";
+$password = "root"; // Your MySQL password
+$dbname = "delecious__pizza";
+
+// Create connection
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+// Check connection
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+?>
+
+delecious__pizza.php:
+<?php
+session_start();
+
+// Database connection details
+$servername = "localhost";
+$username = "root";
+$password = "root"; // Replace with your MySQL password
+$dbname = "delecious__pizza"; // Your database name
+
+// Create connection
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+// Check connection
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// Function to fetch all items from a given table
+function getAllItems($conn, $tableName) {
+    $sql = "SELECT * FROM $tableName";
+    $result = $conn->query($sql);
+
+    if ($result->num_rows > 0) {
+        return $result->fetch_all(MYSQLI_ASSOC);
+    } else {
+        return [];
+    }
+}
+
+// Fetch items from the database
+$pizzas = getAllItems($conn, 'Pizzas');
+$desserts = getAllItems($conn, 'Desserts');
+$beverages = getAllItems($conn, 'Beverages');
+?>
+
+dropdown.js:
+document.addEventListener('click', function(event) {
+    const accountDropdown = document.querySelector('.account-dropdown');
+    const accountLink = document.querySelector('.my-account > a');
+
+    if (!accountDropdown.contains(event.target) && !accountLink.contains(event.target)) {
+        accountDropdown.style.display = 'none';
+    } else {
+        accountDropdown.style.display = 'block';
+    }
+});
+
+document.addEventListener('DOMContentLoaded', function () {
+    const authModal = document.getElementById('authModal');
+    const signInBtn = document.querySelector('.sign-in-btn');
+    const closeAuthModal = document.querySelector('.close-auth-modal');
+
+    signInBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        authModal.style.display = 'block';
+    });
+
+    closeAuthModal.addEventListener('click', function () {
+        authModal.style.display = 'none';
+    });
+
+    window.addEventListener('click', function (event) {
+        if (event.target == authModal) {
+            authModal.style.display = 'none';
+        }
+    });
+});
+
+empty_cart.php:
+<?php
+session_start();
+
+// Clear the cart session
+unset($_SESSION['cart']);
+
+// Optionally, you could also destroy the entire session
+// session_destroy();
+
+echo json_encode(['success' => true, 'message' => 'Cart emptied']);
+?>
+
+header.php:
+<?php
+session_start(); // Start session to access session variables
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delicious Pizza</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Correct Font Awesome link -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <?php if (isset($_SESSION['user_id']) && $_SESSION['user_id'] === 'admin'): ?>
+        <!-- Admin-specific header -->
+        <header>
+            <div class="logo"></div>
+            <nav>
+                <ul>
+                    <li><a href="new_orders.php">New Orders</a></li>
+                    <li><a href="current_orders.php">Current Orders</a></li>
+                    <li><a href="previous_orders.php">Previous Orders</a></li>
+                    <li><a href="my_account.php">My Account</a></li>
+                </ul>
+            </nav>
+        </header>
+    <?php else: ?>
+        <!-- Regular user header -->
+        <header>
+            <div class="logo"></div>
+            <nav>
+                <ul>
+                    <li><a href="index.php">Home</a></li>
+                    <li><a href="index.php#about-us-section">About Us</a></li>
+                    <li><a href="menu.php">Order</a></li>
+                    <li><a href="contactus.php">Contact Us</a></li>
+                    <li class="my-account">
+                        <a href="#">My account</a>
+                        <div class="account-dropdown">
+                            <?php if (isset($_SESSION['user_id'])): ?>
+                                <a href="#" class="logout-btn" style="background-color: red; color: white;">Logout</a>
+                            <?php else: ?>
+                                <a href="#" class="sign-in-btn">Sign in</a>
+                            <?php endif; ?>
+                            <a href="customerPrevious_orders.php">Previous orders</a>
+                            <a href="#">Address editor</a>
+                            <a href="#">Support Tickets</a>
+                        </div>
+                    </li>
+                </ul>
+            </nav>
+            <!-- Cart Icon -->
+            <div class="cart-icon">
+                <a href="cart.php">
+                    <i class="fas fa-shopping-cart"></i>
+                </a>
+            </div>
+        </header>
+    <?php endif; ?>
+
+    <script>
+        // Ensure logout confirmation and sign-in state management
+        document.addEventListener('DOMContentLoaded', function() {
+            const logoutBtn = document.querySelector('.logout-btn');
+            const signInBtn = document.querySelector('.sign-in-btn');
+            const authModal = document.getElementById('authModal');
+
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    if (confirm('Are you sure you want to log out?')) {
+                        window.location.href = 'logout.php';
+                    }
+                });
+            }
+
+            if (signInBtn) {
+                signInBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    authModal.style.display = 'block';
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
+index.php:
+
+<?php
+session_start(); // Start session to access session variables
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delicious Pizza</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+    <!-- Home section -->
+    <section id="home-section" class="hero">
+        <div class="hero-content">
+            <h1>Delicious Pizza</h1>
+            <a href="menu.php" class="order-btn">Order Now</a>
+        </div>
+    </section>
+
+    <!-- About Us Section-->
+    <section id="about-us-section" class="info-section">
+        <div class="section-header">
+            <h2>About Us</h2>
+        </div>
+        <div class="section-content">
+            <p>At Delicious Pizza, we believe that a great pizza is more than just a meal; it's an experience. Inspired by the rich traditions of Naples, the birthplace of pizza, our mission is to bring the authentic flavors of Italy to your table, right here in London.</p>
+        </div>
+    </section>
+
+    <!-- Our philosophy-->
+    <section id="philosophy-section" class="info-section">
+        <div class="section-header">
+            <h2>Our Philosophy</h2>
+        </div>
+        <div class="section-content">
+            <p>We believe in using only the finest ingredients. From San Marzano tomatoes and fresh mozzarella to hand-picked basil and truffles, every element of our pizza is carefully selected to ensure an authentic taste. Our dough is prepared daily, using traditional methods, and baked to perfection in a wood-fired oven, giving it that signature charred crust and soft, airy interior.</p>
+        </div>
+    </section>
+    
+    <!-- Sign In/Register Popup Modal -->
+    <div id="authModal" class="auth-modal">
+        <div class="auth-modal-content">
+            <div class="auth-modal-header">
+                <span class="close-auth-modal">&times;</span>
+                <h2 id="authModalTitle">Authentication</h2>
+            </div>
+            <div class="auth-modal-body" id="authModalBody">
+                <!-- Sign In Form -->
+                <div class="auth-section" id="signInSection">
+                    <h3>Enter your log-in credentials</h3>
+                    <form id="signInForm" action="login.php" method="POST">
+                        <input type="text" name="username" placeholder="Username / E-mail address" required>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="submit" class="auth-btn">Sign in</button>
+                    </form>
+                </div>
+
+                <!-- Register Form -->
+                <div class="auth-section" id="registerSection">
+                    <h3>Not Registered? Sign up easily below</h3>
+                    <form id="registerForm" action="registration.php" method="POST">
+                        <input type="text" name="firstName" placeholder="First Name" required>
+                        <input type="text" name="lastName" placeholder="Last Name" required>
+                        <input type="text" name="username" placeholder="Username" required>
+                        <input type="email" name="email" placeholder="E-mail address" required>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="submit" class="auth-btn">Register</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const authModal = document.getElementById('authModal');
+            const authModalBody = document.getElementById('authModalBody');
+            const authModalTitle = document.getElementById('authModalTitle');
+            const closeAuthModal = document.querySelector('.close-auth-modal');
+
+            // Check if there are messages to display
+            <?php if (isset($_SESSION['success_message'])): ?>
+                authModalTitle.textContent = "Success!";
+                authModalBody.innerHTML = `<p style="color: #4CAF50; text-align: center;"><?php echo $_SESSION['success_message']; ?></p>`;
+                authModal.style.display = "block";
+                <?php unset($_SESSION['success_message']); // Clear the message after displaying it ?>
+            <?php elseif (isset($_SESSION['error_message'])): ?>
+                authModalTitle.textContent = "Error!";
+                authModalBody.innerHTML = `<p style="color: #f44336; text-align: center;"><?php echo $_SESSION['error_message']; ?></p>`;
+                authModal.style.display = "block";
+                <?php unset($_SESSION['error_message']); // Clear the message after displaying it ?>
+            <?php endif; ?>
+
+            // Close the modal when the close button is clicked
+            closeAuthModal.onclick = function() {
+                authModal.style.display = "none";
+                // Optionally, reset the content back to the original form
+                location.reload(); // Reload page to reset modal content
+            };
+
+            // Close the modal if the user clicks anywhere outside of the modal
+            window.onclick = function(event) {
+                if (event.target == authModal) {
+                    authModal.style.display = "none";
+                    location.reload(); // Reload page to reset modal content
+                }
+            };
+        });
+    </script>
+</body>
+</html>
+
+login.php:
+<?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+include 'db_connection.php'; // Include your DB connection script
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $usernameOrEmail = $_POST['username'];
+    $password = $_POST['password'];
+
+    // Check for admin credentials
+    if ($usernameOrEmail === 'admin' && $password === 'admin') {
+        // Set session variables for admin
+        $_SESSION['user_id'] = 'admin';
+        $_SESSION['username'] = 'admin';
+        $_SESSION['role'] = 'admin';
+        
+        header("Location: admin_dashboard.php"); // Redirect to the admin dashboard
+        exit();
+    }
+
+    // Regular user authentication
+    $stmt = $conn->prepare("SELECT id, username, email, password, role FROM Users WHERE email = ? OR username = ?");
+    $stmt->bind_param("ss", $usernameOrEmail, $usernameOrEmail);
+    $stmt->execute();
+    $stmt->store_result();
+    
+    if ($stmt->num_rows > 0) {
+        $stmt->bind_result($id, $username, $email, $hashedPassword, $role);
+        $stmt->fetch();
+
+        // Verify the password
+        if (password_verify($password, $hashedPassword)) {
+            // Set session variables
+            $_SESSION['user_id'] = $id;
+            $_SESSION['username'] = $username;
+            $_SESSION['email'] = $email;
+            $_SESSION['role'] = $role;
+
+            $_SESSION['success_message'] = "Welcome, $username!";
+            header("Location: index.php"); // Redirect to a dashboard or homepage
+        } else {
+            $_SESSION['error_message'] = "Invalid password. Please try again.";
+            header("Location: index.php");
+        }
+    } else {
+        $_SESSION['error_message'] = "No account found with that email or username.";
+        header("Location: index.php");
+    }
+
+    $stmt->close();
+    $conn->close();
+}
+?>
+
+logout.php:
+<?php
+session_start();
+
+// Destroy the session to log out the user
+session_destroy();
+
+// Redirect to the homepage or a page where the user sees they are logged out
+header("Location: index.php");
+exit();
+?>
+
+menu.js:
+document.addEventListener('DOMContentLoaded', function() {
+    attachAddToCartListenersMenu();
+
+    // Function to open the Create Pizza popup
+    window.openCreatePizzaPopup = function() {
+        document.getElementById('createPizzaPopup').style.display = 'block';
+    };
+
+    // Function to close the Create Pizza popup
+    window.closeCreatePizzaPopup = function() {
+        document.getElementById('createPizzaPopup').style.display = 'none';
+    };
+
+    // Function to submit the Create Your Own Pizza form
+    window.submitCreatePizza = function() {
+        const selectedBase = document.querySelector('input[name="base"]:checked');
+        const selectedCheeses = Array.from(document.querySelectorAll('input[name="cheese[]"]:checked')).map(checkbox => checkbox.value);
+        const selectedMeats = Array.from(document.querySelectorAll('input[name="meat[]"]:checked')).map(checkbox => checkbox.value);
+        const selectedVegetables = Array.from(document.querySelectorAll('input[name="vegetables[]"]:checked')).map(checkbox => checkbox.value);
+        const selectedToppings = Array.from(document.querySelectorAll('input[name="toppings[]"]:checked')).map(checkbox => checkbox.value);
+    
+        if (!selectedBase) {
+            alert('Please select a base!');
+            return;
+        }
+    
+        const pizzaDetails = {
+            base: selectedBase.value,
+            cheeses: selectedCheeses,
+            meats: selectedMeats,
+            vegetables: selectedVegetables,
+            toppings: selectedToppings
+        };
+    
+        // Send the custom pizza details to the server using AJAX
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "update_cart.php", true);
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                closeCreatePizzaPopup();
+                alert('Custom pizza added to cart!');
+                // Optionally, update the cart UI here
+            }
+        };
+        xhr.send(`action=add_custom&item=Create Your Own Pizza&details=${encodeURIComponent(JSON.stringify(pizzaDetails))}&quantity=1`);
+    };
+
+    function attachAddToCartListenersMenu() {
+        document.querySelectorAll('.add-to-cart-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const itemName = button.dataset.id;
+                const price = button.dataset.price;
+
+                // AJAX request to add the item to the cart
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", "update_cart.php", true);
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState === 4 && xhr.status === 200) {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response.status === 'success') {
+                            // Transform the button into a quantity selector
+                            transformButtonToQuantitySelector(button, itemName, price);
+                        }
+                    }
+                };
+                xhr.send(`action=add&item=${encodeURIComponent(itemName)}&quantity=1&price=${encodeURIComponent(price)}`);
+            });
+        });
+    }
+
+    function transformButtonToQuantitySelector(button, itemName, price) {
+        button.outerHTML = `
+            <div class="quantity-controls">
+                <button class="quantity-btn decrement" data-item="${itemName}" data-price="${price}">
+                    <span class="icon">🗑️</span>
+                </button>
+                <span class="quantity">1</span>
+                <button class="quantity-btn increment" data-item="${itemName}" data-price="${price}">+</button>
+            </div>
+        `;
+
+        document.querySelector(`.quantity-controls .decrement[data-item="${itemName}"]`).addEventListener('click', handleQuantityChange);
+        document.querySelector(`.quantity-controls .increment[data-item="${itemName}"]`).addEventListener('click', handleQuantityChange);
+    }
+
+    function handleQuantityChange(event) {
+        const button = event.currentTarget;
+        const itemName = button.dataset.item;
+        const price = button.dataset.price;
+        const quantityElement = button.parentElement.querySelector('.quantity');
+        let quantity = parseInt(quantityElement.textContent);
+
+        if (button.classList.contains('increment')) {
+            quantity++;
+        } else if (button.classList.contains('decrement')) {
+            if (quantity > 1) {
+                quantity--;
+            } else {
+                button.parentElement.parentElement.innerHTML = `
+                    <button class="add-to-cart-btn" data-id="${itemName}" data-price="${price}">Add to cart</button>
+                `;
+                document.querySelector(`.add-to-cart-btn[data-id="${itemName}"]`).addEventListener('click', function() {
+                    transformButtonToQuantitySelector(button, itemName, price);
+                });
+                return;
+            }
+        }
+
+        // Update the icon based on quantity
+        const decrementButton = button.parentElement.querySelector('.decrement .icon');
+        if (quantity > 1) {
+            decrementButton.textContent = '-';
+        } else {
+            decrementButton.textContent = '🗑️';
+        }
+
+        // Update the displayed quantity
+        quantityElement.textContent = quantity;
+
+        // Update the quantity in the cart via AJAX
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "update_cart.php", true);
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        xhr.send(`action=update&item=${encodeURIComponent(itemName)}&quantity=${encodeURIComponent(quantity)}`);
+    }
+
+    function attachQuantityControlListeners() {
+        // Handle quantity adjustments in the cart page if needed
+        document.querySelectorAll('.quantity-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const isIncrement = button.classList.contains('increment');
+                const quantityElement = button.parentElement.querySelector('.quantity');
+                let currentQuantity = parseInt(quantityElement.textContent);
+                const itemName = button.dataset.item;
+
+                if (isIncrement) {
+                    currentQuantity++;
+                } else if (currentQuantity > 1) {
+                    currentQuantity--;
+                } else if (currentQuantity === 1 && !isIncrement) {
+                    const cartItem = button.closest('.cart-item');
+                    cartItem.parentNode.removeChild(cartItem);
+                    currentQuantity = 0;
+                }
+
+                if (currentQuantity > 0) {
+                    quantityElement.textContent = currentQuantity;
+                }
+
+                // Update the quantity in the session via AJAX
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", "update_cart.php", true);
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState === 4 && xhr.status === 200) {
+                        updateCartSummary(); // Update the cart summary
+                    }
+                };
+                xhr.send(`action=update&item=${encodeURIComponent(itemName)}&quantity=${encodeURIComponent(currentQuantity)}`);
+            });
+        });
+    }
+
+    function updateCartSummary() {
+        let subtotal = 0;
+        document.querySelectorAll('.cart-item').forEach(item => {
+            const quantity = parseInt(item.querySelector('.quantity').textContent);
+            const price = parseFloat(item.querySelector('.item-price').textContent.replace('£', '')) / quantity;
+            subtotal += price * quantity;
+        });
+
+        const vat = subtotal * 0.2; // 20% VAT
+        const total = subtotal + vat;
+
+        document.querySelector('.subtotal span:last-child').textContent = `£${subtotal.toFixed(2)}`;
+        document.querySelector('.vat span:last-child').textContent = `£${vat.toFixed(2)}`;
+        document.querySelector('.total span:last-child').textContent = `£${total.toFixed(2)}`;
+    }
+
+    attachQuantityControlListeners(); // Attach listeners for the cart page
+});
+
+menu.php:
+<?php
+include 'delecious__pizza.php';
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Menu - Delicious Pizza</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css"> <!-- Use the same CSS file -->
+</head>
+<body>
+    <?php include 'header.php'; ?> <!-- Include the dynamic header -->
+
+    <section class="menu-search">
+        <input type="text" placeholder="Search for an item in the menu">
+    </section>
+
+    <!-- Pizzas Section -->
+    <section class="menu-section">
+        <h2>Pizza</h2>
+        <div class="menu-grid">
+            <?php foreach ($pizzas as $pizza): ?>
+                <div class="menu-item">
+                    <img src="<?php echo htmlspecialchars($pizza['image']); ?>" alt="<?php echo htmlspecialchars($pizza['name']); ?>">
+                    <div class="item-header">
+                        <h3><?php echo htmlspecialchars($pizza['name']); ?></h3>
+                        <span class="price">£<?php echo htmlspecialchars($pizza['price']); ?></span>
+                    </div>
+                    <p><?php echo htmlspecialchars($pizza['description']); ?></p>
+
+                    <div class="cart-control">
+                        <?php 
+                        $itemName = htmlspecialchars($pizza['name']);
+                        if ($itemName === 'Create Your Own'): 
+                        ?>
+                            <button class="create-pizza-btn" onclick="openCreatePizzaPopup()">
+                                Create
+                            </button>
+                        <?php else: ?>
+                            <?php if (isset($_SESSION['cart'][$itemName])): 
+                                $quantity = $_SESSION['cart'][$itemName]['quantity'];
+                            ?>
+                                <div class="quantity-controls">
+                                    <button class="quantity-btn decrement" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($pizza['price']); ?>">
+                                        <span class="icon"><?php echo $quantity > 1 ? '-' : '🗑️'; ?></span>
+                                    </button>
+                                    <span class="quantity"><?php echo $quantity; ?></span>
+                                    <button class="quantity-btn increment" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($pizza['price']); ?>">+</button>
+                                </div>
+                            <?php else: ?>
+                                <button class="add-to-cart-btn" 
+                                        data-id="<?php echo $itemName; ?>" 
+                                        data-price="<?php echo htmlspecialchars($pizza['price']); ?>">
+                                    Add to cart
+                                </button>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </section>
+
+    <!-- Desserts Section -->
+    <section class="menu-section">
+        <h2>Dessert</h2>
+        <div class="menu-grid-wide">
+            <?php foreach ($desserts as $dessert): ?>
+                <div class="menu-item wide-item">
+                    <img src="<?php echo htmlspecialchars($dessert['image']); ?>" alt="<?php echo htmlspecialchars($dessert['name']); ?>">
+                    <div class="item-header">
+                        <h3><?php echo htmlspecialchars($dessert['name']); ?></h3>
+                        <span class="price">£<?php echo htmlspecialchars($dessert['price']); ?></span>
+                    </div>
+                    <p><?php echo htmlspecialchars($dessert['description']); ?></p>
+
+                    <div class="cart-control">
+                        <?php 
+                        $itemName = htmlspecialchars($dessert['name']);
+                        if (isset($_SESSION['cart'][$itemName])): 
+                            $quantity = $_SESSION['cart'][$itemName]['quantity'];
+                        ?>
+                            <div class="quantity-controls">
+                                <button class="quantity-btn decrement" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($dessert['price']); ?>">
+                                    <span class="icon"><?php echo $quantity > 1 ? '-' : '🗑️'; ?></span>
+                                </button>
+                                <span class="quantity"><?php echo $quantity; ?></span>
+                                <button class="quantity-btn increment" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($dessert['price']); ?>">+</button>
+                            </div>
+                        <?php else: ?>
+                            <button class="add-to-cart-btn" 
+                                    data-id="<?php echo $itemName; ?>" 
+                                    data-price="<?php echo htmlspecialchars($dessert['price']); ?>">
+                                Add to cart
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </section>
+
+    <!-- Beverages Section -->
+    <section class="menu-section">
+        <h2>Beverages</h2>
+        <div class="menu-grid">
+            <?php foreach ($beverages as $beverage): ?>
+                <div class="menu-item">
+                    <img src="<?php echo htmlspecialchars($beverage['image']); ?>" alt="<?php echo htmlspecialchars($beverage['name']); ?>">
+                    <div class="item-header">
+                        <h3><?php echo htmlspecialchars($beverage['name']); ?></h3>
+                        <span class="price">£<?php echo htmlspecialchars($beverage['price']); ?></span>
+                    </div>
+                    <p><?php echo htmlspecialchars($beverage['description']); ?></p>
+
+                    <div class="cart-control">
+                        <?php 
+                        $itemName = htmlspecialchars($beverage['name']);
+                        if (isset($_SESSION['cart'][$itemName])): 
+                            $quantity = $_SESSION['cart'][$itemName]['quantity'];
+                        ?>
+                            <div class="quantity-controls">
+                                <button class="quantity-btn decrement" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($beverage['price']); ?>">
+                                    <span class="icon"><?php echo $quantity > 1 ? '-' : '🗑️'; ?></span>
+                                </button>
+                                <span class="quantity"><?php echo $quantity; ?></span>
+                                <button class="quantity-btn increment" data-item="<?php echo $itemName; ?>" data-price="<?php echo htmlspecialchars($beverage['price']); ?>">+</button>
+                            </div>
+                        <?php else: ?>
+                            <button class="add-to-cart-btn" 
+                                    data-id="<?php echo $itemName; ?>" 
+                                    data-price="<?php echo htmlspecialchars($beverage['price']); ?>">
+                                Add to cart
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </section>
+
+    <!-- Popup Structure for Create Your Own Pizza -->
+    <!-- Popup Structure for Create Your Own Pizza -->
+    <div id="createPizzaPopup" class="popup">
+        <div class="popup-content">
+            <div class="popup-header">
+                <h3 class="popup-title">Create Your Own Pizza</h3>
+                <span class="close" onclick="closeCreatePizzaPopup()">&times;</span>
+            </div>
+
+            <!-- Bases Section -->
+            <h2 class="popup-selection-titles">Select Base:</h2>
+            <div class="empty-box-container">
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/plainBase.jpg" alt="Plain Neapolitan Pizza Dough">
+                        <label>
+                            <input type="radio" name="base" value="Plain Neapolitan Pizza Dough" required>
+                            Plain Neapolitan Pizza Dough
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/tomatoBase.jpg" alt="San Marzano Tomato Sauce">
+                        <label>
+                            <input type="radio" name="base" value="San Marzano Tomato Sauce" required>
+                            San Marzano Tomato Sauce
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cheeses Section -->
+            <h2 class="popup-selection-titles">Select Cheese:</h2>
+            <div class="empty-box-container">
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/mozzarellaCheese.jpg" alt="Fresh Mozzarella Cheese (Fior di Latte)">
+                        <label>
+                            <input type="checkbox" name="cheese[]" value="Fresh Mozzarella Cheese (Fior di Latte)">
+                            Fresh Mozzarella Cheese (Fior di Latte)
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/burrataCheese.jpg" alt="Burrata Cheese">
+                        <label>
+                            <input type="checkbox" name="cheese[]" value="Burrata Cheese">
+                            Burrata Cheese
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/parmigianoCheese.jpg" alt="Parmigiano Reggiano">
+                        <label>
+                            <input type="checkbox" name="cheese[]" value="Parmigiano Reggiano">
+                            Parmigiano Reggiano
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/pecorinoCheese.jpg" alt="Pecorino Cheese">
+                        <label>
+                            <input type="checkbox" name="cheese[]" value="Pecorino Cheese">
+                            Pecorino Cheese
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Meats Section -->
+            <h2 class="popup-selection-titles">Select Meat:</h2>
+            <div class="empty-box-container">
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/salamiMeat.jpg" alt="Italian Salami">
+                        <label>
+                            <input type="checkbox" name="meat[]" value="Italian Salami">
+                            Italian Salami
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/sausageMeat.jpg" alt="Italian Sausage">
+                        <label>
+                            <input type="checkbox" name="meat[]" value="Italian Sausage">
+                            Italian Sausage
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vegetables Section -->
+            <h2 class="popup-selection-titles">Select Vegetables:</h2>
+            <div class="empty-box-container">
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/tomatoesVeg.jpg" alt="Cherry Tomatoes">
+                        <label>
+                            <input type="checkbox" name="vegetables[]" value="Cherry Tomatoes">
+                            Cherry Tomatoes
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/garlicVeg.jpg" alt="Fresh Garlic">
+                        <label>
+                            <input type="checkbox" name="vegetables[]" value="Fresh Garlic">
+                            Fresh Garlic
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/peppersVeg.jpg" alt="Chili Peppers">
+                        <label>
+                            <input type="checkbox" name="vegetables[]" value="Chili Peppers">
+                            Chili Peppers
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Toppings Section -->
+            <h2 class="popup-selection-titles">Select Toppings:</h2>
+            <div class="empty-box-container">
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/truffleTopping.jpg" alt="Summer Truffles">
+                        <label>
+                            <input type="checkbox" name="toppings[]" value="Summer Truffles">
+                            Summer Truffles
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/parsleyTopping.jpg" alt="Parsley Leaves">
+                        <label>
+                            <input type="checkbox" name="toppings[]" value="Parsley Leaves">
+                            Parsley Leaves
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/arugulaTopping.jpg" alt="Arugula Leaves">
+                        <label>
+                            <input type="checkbox" name="toppings[]" value="Arugula Leaves">
+                            Arugula Leaves
+                        </label>
+                    </div>
+                </div>
+                <div class="popup-menu-item">
+                    <div class="menu-item-placeholder">
+                        <img src="images/oreganoTopping.jpg" alt="Oregano Leaves">
+                        <label>
+                            <input type="checkbox" name="toppings[]" value="Oregano Leaves">
+                            Oregano Leaves
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <hr class="popup-separator">
+
+            <!-- Add to Cart Button -->
+            <div class="popup-add-to-cart">
+                <button class="create-pizza-submit-btn" onclick="submitCreatePizza()">Add to Cart</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="menu.js"></script> <!-- Use the JavaScript file specific for the menu page -->
+</body>
+</html>
+
+new_orders.php:
+<?php
+session_start();
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== 'admin') {
+    header("Location: index.php"); // Redirect to homepage if not admin
+    exit();
+}
+
+include 'db_connection.php'; // Include your DB connection script
+
+// Fetch new orders from the database where the status is 'pending'
+$query = "SELECT * FROM Orders WHERE status = 'pending'";
+$result = $conn->query($query);
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Orders - Delicious Pizza Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'admin_header.php'; ?> <!-- Admin-specific header -->
+
+    <main>
+        <h2>New Orders</h2>
+
+        <?php if ($result->num_rows > 0): ?>
+            <?php while ($order = $result->fetch_assoc()): ?>
+                <div class="order">
+                    <div class="order-header">
+                        <h3>Order #<?php echo $order['id']; ?></h3>
+                        <p><?php echo $order['created_at']; ?></p>
+                    </div>
+                    <div class="order-details">
+                        <p><strong>Order Total:</strong> £<?php echo number_format($order['total_price'], 2); ?></p>
+                        <p><strong>Delivery Address:</strong> <?php echo $order['delivery_address']; ?></p>
+                    </div>
+                    <button class="accept-btn" onclick="acceptOrder(<?php echo $order['id']; ?>)">Accept</button>
+                </div>
+            <?php endwhile; ?>
+        <?php else: ?>
+            <p>No new orders at the moment.</p>
+        <?php endif; ?>
+
+        <?php $conn->close(); ?>
+    </main>
+
+    <script>
+        function acceptOrder(orderId) {
+            fetch('accept_order.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `order_id=${orderId}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload(); // Reload the page to remove the accepted order
+                } else {
+                    alert('Error accepting order.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+    </script>
+</body>
+</html>
+
+previous_orders.php:
+<?php
+session_start();
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] !== 'admin') {
+    header("Location: index.php"); // Redirect to homepage if not admin
+    exit();
+}
+
+include 'db_connection.php'; // Include your DB connection script
+
+// Fetch orders from the database where the status is 'picked up' or 'delivered'
+$query = "SELECT * FROM Orders WHERE status IN ('picked up', 'delivered')";
+$result = $conn->query($query);
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Previous Orders - Delicious Pizza Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inika:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <?php include 'admin_header.php'; ?> <!-- Admin-specific header -->
+
+    <main>
+        <h2>Previous Orders</h2>
+
+        <?php if ($result->num_rows > 0): ?>
+            <?php while ($order = $result->fetch_assoc()): ?>
+                <div class="order">
+                    <div class="order-header">
+                        <h3>Order #<?php echo $order['id']; ?></h3>
+                        <p><?php echo $order['created_at']; ?></p>
+                    </div>
+                    <div class="order-details">
+                        <p><strong>Order Total:</strong> £<?php echo number_format($order['total_price'], 2); ?></p>
+                        <p><strong>Delivery Address:</strong> <?php echo $order['delivery_address']; ?></p>
+                        <p><strong>Status:</strong> <?php echo ucfirst($order['status']); ?></p>
+                    </div>
+                </div>
+            <?php endwhile; ?>
+        <?php else: ?>
+            <p>No previous orders at the moment.</p>
+        <?php endif; ?>
+
+        <?php $conn->close(); ?>
+    </main>
+
+</body>
+</html>
+
+process_checkout.php:
+<?php
+session_start();
+include 'db_connection.php'; // Include the database connection
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $orderType = $_POST['orderType'];
+    $userId = $_SESSION['user_id'] ?? null;
+    $totalPrice = $_SESSION['cart_total'] ?? 0; // Assuming you store the cart total in a session variable
+    $createdAt = date('Y-m-d H:i:s');
+    $status = 'new'; // Initial status of the order
+
+    // If delivery, get address details
+    $deliveryAddress = '';
+    if ($orderType === 'delivery') {
+        $streetAddress = $_POST['streetAddress'];
+        $city = $_POST['city'];
+        $postcode = $_POST['postcode'];
+        $deliveryAddress = "$streetAddress, $city, $postcode";
+    }
+
+    // Prepare and execute the order insertion query
+    $stmt = $conn->prepare("INSERT INTO orders (user_id, status, total_price, delivery_address, created_at) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param("ssdss", $userId, $status, $totalPrice, $deliveryAddress, $createdAt);
+
+    if ($stmt->execute()) {
+        // Order inserted successfully, redirect to the confirmation page
+        if ($orderType === 'delivery') {
+            header("Location: confirmation_delivery.php");
+        } else {
+            header("Location: confirmation_pickup.php");
+        }
+        exit();
+    } else {
+        // Handle insertion error
+        echo "Unable to process checkout: " . $stmt->error;
+    }
+
+    $stmt->close();
+    $conn->close();
+} else {
+    echo "Invalid request method.";
+}
+?>
+
+process_payment.php:
+<?php
+session_start();
+
+// Assuming payment is processed here...
+// Check if the payment was successful
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_type'])) {
+    $orderType = $_POST['order_type']; // Retrieve user's choice
+
+    // Redirect based on the user's choice
+    if ($orderType === 'pickup') {
+        header('Location: confirmation_pickup.php');
+    } elseif ($orderType === 'delivery') {
+        header('Location: confirmation_delivery.php');
+    } else {
+        // Default case or handle error
+        header('Location: checkout.php');
+    }
+    exit();
+} else {
+    // Handle invalid access or error
+    header('Location: checkout.php');
+    exit();
+}
+?>
+
+registeration.php:
+<?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+include 'db_connection.php'; // Include your DB connection script
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $firstName = $_POST['firstName'];
+    $lastName = $_POST['lastName'];
+    $email = $_POST['email'];
+    $username = $_POST['username'];
+    $password = $_POST['password'];
+
+    // Basic validation
+    if (empty($firstName) || empty($lastName) || empty($email) || empty($username) || empty($password)) {
+        $_SESSION['error_message'] = "All fields are required.";
+        header("Location: index.php");
+        exit();
+    }
+
+    // Check if username or email already exists
+    $stmt = $conn->prepare("SELECT id FROM Users WHERE email = ? OR username = ?");
+    $stmt->bind_param("ss", $email, $username);
+    $stmt->execute();
+    $stmt->store_result();
+
+    if ($stmt->num_rows > 0) {
+        $_SESSION['error_message'] = "Email or Username already exists.";
+        header("Location: index.php");
+        exit();
+    }
+
+    // Hash the password
+    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+
+    // Insert the new user into the database
+    $stmt = $conn->prepare("INSERT INTO Users (username, email, password, role) VALUES (?, ?, ?, 'customer')");
+    $stmt->bind_param("sss", $username, $email, $hashedPassword);
+
+    if ($stmt->execute()) {
+        $_SESSION['success_message'] = "Registration successful! Please log in.";
+        header("Location: index.php");
+    } else {
+        $_SESSION['error_message'] = "Something went wrong. Please try again.";
+        header("Location: index.php");
+    }
+
+    $stmt->close();
+    $conn->close();
+}
+?>
+
+save_order.php:
+<?php
+session_start();
+include 'db_connection.php'; // Include your DB connection script
+
+$response = ['success' => false]; // Initialize response
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    // Check if the user is logged in
+    if (!isset($_SESSION['user_id'])) {
+        $response['message'] = "User not logged in.";
+        echo json_encode($response);
+        exit();
+    }
+
+    // Get user ID from session
+    $user_id = $_SESSION['user_id'];
+    
+    // Get form data
+    $delivery_address = $_POST['delivery_address'];
+    $total_price = 25.99; // Example total price; replace with actual logic to calculate total
+
+    // Prepare and execute the query
+    $stmt = $conn->prepare("INSERT INTO Orders (user_id, status, total_price, delivery_address) VALUES (?, 'pending', ?, ?)");
+    $stmt->bind_param("ids", $user_id, $total_price, $delivery_address);
+
+    if ($stmt->execute()) {
+        $response['success'] = true;
+    } else {
+        $response['message'] = "Unable to process order: " . $stmt->error;
+    }
+
+    $stmt->close();
+    $conn->close();
+}
+
+echo json_encode($response);
+?>
+
+styles.css:
+/* Base styles */
+body, html {
+    margin: 0;
+    padding: 0;
+    font-family: 'Inika', serif;
+    height: 100%;
+    overflow-x: hidden;
+    background-color: #fff;
+}
+
+/* Header styling */
+/* Header styling */
+header {
+    display: flex;
+    justify-content: center; /* Center the main content horizontally */
+    align-items: center; /* Center the items vertically */
+    padding: 20px 40px;
+    background-color: #362706;
+    position: relative;
+}
+
+/* Adjust the navigation styling */
+nav ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 40px;
+}
+
+/* Navigation link styles */
+nav ul li a {
+    text-decoration: none;
+    color: white;
+    font-weight: 400;
+    padding: 10px 35px;
+}
+
+nav ul li a:hover {
+    text-decoration: underline;
+}
+
+/* Logo styling */
+.logo {
+    position: absolute;
+    left: 20px;
+    width: 50px;
+    height: 50px;
+    background-color: white;
+}
+
+/* Cart Icon styles */
+.cart-icon {
+    position: absolute;
+    top: 50%;
+    right: 20px;
+    transform: translateY(-50%); /* Center the cart icon vertically in the header */
+    z-index: 1000;
+}
+
+.cart-icon a {
+    color: white;
+    font-size: 1.5rem;
+    text-decoration: none;
+}
+
+.cart-icon a:hover {
+    color: #d66b33;
+}
+
+/* Reset any unwanted browser default styles */
+.cart-icon a, .cart-icon a:visited, .cart-icon a:active, .cart-icon a:link, .cart-icon a:focus {
+    color: white !important;
+    text-decoration: none;
+}
+
+
+/* Additional styles (Other existing styles remain unchanged) */
+/* Add any other styles you had, ensuring no duplicates or contradictory rules */
+
+
+
+/* Hero Section */
+.hero {
+    background-image: url('images/pizza-background.jpg');
+    background-size: cover;
+    background-position: center;
+    height: calc(100vh - 70px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    text-align: center;
+    position: relative;
+}
+.hero-content {
+    position: absolute;
+    bottom: 250px;
+    left: 50px;
+    text-align: left;
+}
+.hero-content h1 {
+    font-size: 4rem;
+    margin: 0;
+}
+.order-btn {
+    display: inline-block;
+    margin-top: 20px;
+    padding: 10px 20px;
+    background-color: #B2533E;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+}
+.order-btn:hover {
+    background-color: #d66b33;
+}
+
+/* Info Sections */
+.info-section {
+    padding: 90px 150px;
+    text-align: center;
+    background-color: #f9f9f9;
+}
+.section-header {
+    background-color: #526D42;
+    padding: 20px;
+    color: white;
+    border-radius: 8px;
+}
+.section-header h2 {
+    font-size: 2.5rem;
+    margin: 0;
+    font-weight: 500;
+}
+.section-content {
+    max-width: 800px;
+    margin: -15px auto 0 auto;
+    background-color: #f4ecc2;
+    padding: 30px;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.section-content p {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    margin: 0;
+    color: #333;
+}
+
+/* Menu Page */
+.menu-search {
+    display: flex;
+    justify-content: center;
+    margin: 20px 0;
+}
+.menu-search input[type="text"] {
+    width: 60%;
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+.menu-section {
+    margin: 30px 150px;
+    text-align: center;
+}
+.menu-section h2 {
+    background-color: #526D42;
+    color: white;
+    padding: 5px 0;
+    margin-bottom: 20px;
+    font-weight: 400;
+}
+.menu-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    max-width: 100%;
+}
+.menu-item {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    padding: 15px;
+}
+.menu-item img {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    object-fit: cover;
+}
+.menu-item h3 {
+    font-size: 1.0rem;
+    margin: 5px 0;
+}
+.menu-item p {
+    margin-top: -5px;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+    color: #666;
+}
+.item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+}
+.item-header h3 {
+    margin: 5px;
+    flex-grow: 1;
+}
+.item-header .price {
+    font-size: 1.0rem;
+    color: #e07c42;
+}
+
+.menu-grid-wide {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+    max-width: 100%;
+}
+
+/* Add to Cart Button */
+.add-to-cart-btn {
+    font-weight: 400;
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #B2533E;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    border: 2px solid black;
+    width: 50%;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    margin: 0 auto;
+}
+.add-to-cart-btn.cart-active {
+    display: flex;
+    background-color: white;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 5px;
+}
+.add-to-cart-btn .icon {
+    font-size: 1.0rem;
+    color: black;
+    margin: 0 10px;
+}
+
+.add-to-cart-btn .quantity {
+    font-size: 1.0rem;
+    color: black;
+}
+
+/* Cart */
+/* Cart Page */
+.cart-container {
+    padding: 20px 150px;
+    max-width: 600px;
+    margin: 0 auto;
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.cart-title {
+    font-size: 2rem;
+    margin-bottom: 20px;
+    text-align: center;
+    color: #362706;
+}
+
+/* Custom CSS for Cart Page */
+.cart-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center; /* Align everything on the same line */
+    padding: 10px;
+    margin-bottom: 10px;
+    background-color: #f4ecc2;
+    border-radius: 5px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.item-details {
+    display: flex;
+    align-items: center; /* Ensure the name and quantity controls are aligned */
+    flex-grow: 1; /* Allow the item details to take up available space */
+    gap: 20px; /* Space between the item name and the quantity controls */
+}
+
+.item-name {
+    font-size: 1.2rem;
+    color: #362706;
+    flex-shrink: 0; /* Prevent the item name from shrinking */
+}
+
+.quantity-controls {
+    display: flex;
+    align-items: center;
+    background-color: white;
+    border-radius: 5px;
+    padding: 5px;
+    width: auto; /* Adjust to the content's width */
+    color: black;
+    font-weight: bold;
+    border: 2px solid black;
+}
+
+.item-price-box {
+    font-size: 1.2rem;
+    color: #362706;
+    background-color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    min-width: 80px;
+    text-align: center;
+    flex-shrink: 0; /* Prevent the price box from shrinking */
+}
+
+.custom-pizza-details {
+    flex-grow: 1;
+    margin-right: 20px; /* Add some space between the ingredients and the quantity controls */
+}
+
+.ingredients-list {
+    margin-top: 5px; /* Add a small margin at the top */
+    color: #666; /* A slightly lighter color for the ingredients text */
+    font-size: 0.9rem; /* Smaller font size for ingredients */
+    line-height: 1.4; /* Improve readability */
+}
+
+.cart-summary {
+    margin-top: 20px;
+}
+
+.subtotal, .coupon, .vat, .total {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    background-color: #e7dcb1;
+    padding: 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    font-size: 1.2rem;
+    color: #362706;
+}
+
+.coupon input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+.checkout-btn {
+    display: block;
+    width: 100%;
+    padding: 10px 20px;
+    background-color: #526D42;
+    color: white;
+    text-align: center;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1.2rem;
+    margin-top: 20px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.checkout-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* Quantity Control Styling */
+/* Quantity Control Styling */
+.quantity-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: white;
+    border-radius: 5px;
+    padding: 5px;
+    width: 100%;
+    max-width: 120px;
+    margin: 0 auto;
+    color: black;
+    font-weight: bold;
+    border: 2px solid black; /* Add a black border */
+}
+
+.quantity-controls .quantity-btn {
+    background-color: transparent;
+    border: none;
+    color: black;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+}
+
+.quantity-controls .quantity-btn:hover {
+    color: #d66b33;
+}
+
+.quantity-controls .quantity {
+    font-size: 1rem;
+    text-align: center;
+    flex-grow: 1;
+}
+
+/* Icon Styling */
+.quantity-controls .icon {
+    font-size: 1.0rem;
+}
+
+/* Popup */
+
+/* Style the Create Button */
+button.create-pizza-btn {
+    font-weight: 400;
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #B2533E;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    border: 2px solid black;
+    width: 50%;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    margin: 0 auto;
+}
+
+.create-pizza-btn:hover {
+    background-color: #d66b33;
+}
+
+.popup {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.popup-content {
+    background-color: white;
+    margin: 10% auto;
+    padding: 0;
+    border-radius: 10px;
+    width: 800px;
+    max-width: 90%;
+    max-height: 80%;
+    overflow-y: auto;
+    position: relative;
+}
+
+.popup-header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #362706;
+    color: white;
+    padding: 20px;
+    border-radius: 10px 10px 0 0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin-bottom: 20px;
+}
+
+.popup-title {
+    font-size: 25px;
+    font-weight: 400;
+    margin: 0;
+    text-align: center;
+    flex-grow: 1;
+}
+
+.close {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    font-size: 28px;
+}
+
+.popup-selection-titles {
+    background-color: #526D42;
+    color: white;
+    padding: 5px 0;
+    margin-bottom: 20px;
+    font-weight: 400;
+    font-size: 20px;
+    text-align: center;
+    width: 90%;
+    margin: 0 auto 20px;
+    border-radius: 8px;
+}
+
+.empty-box-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    padding: 20px;
+    margin-top: -20px;
+}
+
+.popup-menu-item {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 10px;
+    text-align: center;
+    flex: 1 1 calc(23% - 20px);
+    max-width: calc(23% - 20px);
+}
+
+.menu-item-placeholder img {
+    width: 100%;
+    height: 100px;
+    border-radius: 10px;
+    object-fit: contain;
+}
+
+label {
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #333;
+}
+
+.popup-separator {
+    height: 1px;
+    background-color: #ccc;
+    margin: 20px 0;
+}
+
+.popup-add-to-cart {
+    text-align: center;
+    margin-top: 20px;
+    padding: 20px;
+    background-color: white;
+}
+
+.popup-add-to-cart button {
+    background-color: #B2533E;
+    color: white;
+    padding: 10px 20px;
+    border: 2px solid black;
+    border-radius: 5px;
+    font-size: 1rem;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.3s ease;
+    display: inline-block;
+    text-align: center;
+    width: 100%;
+    max-width: 200px;
+    margin: 0 auto;
+}
+
+.popup-add-to-cart button:hover {
+    background-color: #d66b33;
+}
+
+/* Dropdown Menu Styling */
+/* Dropdown Container */
+.account-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #f4ecc2;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border: 1px solid #ccc;
+    border-top: none;
+    width: 200px;
+    z-index: 1000;
+}
+
+/* Style for each dropdown item */
+.account-dropdown a {
+    display: block;
+    padding: 10px 20px;
+    color: #362706;
+    text-decoration: none;
+    border-top: 1px solid #ccc;
+    background-color: #f4ecc2;
+    text-align: center;
+    font-weight: 400;
+}
+
+/* Hover effect for dropdown items */
+.account-dropdown a:hover {
+    background-color: #e7dcb1;
+}
+
+/* Specific styling for the "Sign in" button */
+.account-dropdown a.sign-in-btn {
+    background-color: #526D42;
+    color: white;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.account-dropdown a.sign-in-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* Dropdown Trigger (My Account) */
+.my-account {
+    position: relative;
+}
+
+/* Style for My Account link */
+.my-account > a {
+    display: block;
+    padding: 10px 20px;
+    color: white;
+    font-weight: 700;
+    background-color: #362706;
+    text-align: center;
+    text-decoration: none;
+    border-bottom: 2px solid #362706;
+}
+
+.my-account > a:hover {
+    background-color: #4a5f3b;
+}
+
+/* Ensure the dropdown aligns with the My Account button */
+.my-account:hover .account-dropdown {
+    display: block;
+}
+
+/* AUTHENTICATION POPUP */
+/* Popup Modal Background */
+/* AUTHENTICATION AND SUCCESS POPUP STYLES */
+/* Popup Modal Background */
+.auth-modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1000; /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    background-color: rgba(0, 0, 0, 0.5); /* Black background with opacity */
+    overflow: auto; /* Enable scroll if needed */
+}
+
+/* Modal Content */
+.auth-modal-content {
+    background-color: #f4ecc2;
+    margin: 10% auto; /* 10% from the top and centered */
+    padding: 0; /* Remove padding */
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 500px;
+    border-radius: 8px;
+    text-align: center; /* Center-align the text */
+    position: relative;
+}
+
+/* Modal Header */
+.auth-modal-header {
+    display: flex;
+    justify-content: center; /* Center the content horizontally */
+    align-items: center; /* Vertically center the content */
+    background-color: #362706;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 8px 8px 0 0;
+    text-align: center;
+    position: relative; /* Position relative to contain the close button */
+}
+
+/* Close Button */
+.close-auth-modal {
+    position: absolute; /* Position the close button absolutely */
+    right: 10px; /* Move the close button to the right */
+    top: 50%; /* Center the close button vertically */
+    transform: translateY(-50%); /* Adjust for vertical centering */
+    color: white;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+/* Authentication Section */
+.auth-section {
+    margin-top: 20px;
+}
+
+.auth-section h3 {
+    margin-bottom: 10px;
+    font-size: 1.2rem;
+    color: #362706;
+    text-align: center;
+}
+
+
+/* Form Fields */
+.auth-section input[type="text"],
+.auth-section input[type="password"],
+.auth-section input[type="email"] {
+    width: 100%;
+    padding: 10px;
+    margin: 8px 0;
+    display: inline-block;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+/* Submit Button */
+.auth-btn {
+    display: block;
+    width: 100%;
+    background-color: #526D42;
+    color: white;
+    padding: 12px 20px;
+    margin-top: 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: center;
+}
+
+.auth-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* Alert messages */
+.alert {
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.alert.success {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.alert.error {
+    background-color: #f44336;
+    color: white;
+}
+
+/* Alert Modal Background */
+.alert-modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    overflow: auto;
+}
+
+/* Modal Content */
+.alert-modal-content {
+    background-color: #fefefe;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 400px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+/* Close Button */
+.close-alert-modal {
+    color: #aaa;
+    font-size: 28px;
+    font-weight: bold;
+    float: right;
+    cursor: pointer;
+}
+
+.close-alert-modal:hover,
+.close-alert-modal:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+/* Alert message text */
+#alertMessage {
+    font-size: 1.2rem;
+    color: #333;
+    margin-top: 10px;
+}
+
+/* FAQ Section */
+.faq-section {
+    max-width: 800px;
+    margin: 50px auto;
+    padding: 20px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    text-align: left;
+}
+
+.faq-section h1 {
+    font-size: 2rem;
+    color: #362706;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+.faq-item h2 {
+    font-size: 1.5rem;
+    background-color: #526D42;
+    color: white;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+}
+
+.faq-item p {
+    background-color: #f4ecc2;
+    padding: 15px;
+    border-radius: 5px;
+    color: #362706;
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+/* Contact Form Section */
+.contact-form-section {
+    max-width: 800px;
+    margin: 50px auto;
+    padding: 20px;
+    background-color: #f4ecc2;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.contact-form-section h1 {
+    font-size: 2rem;
+    color: #362706;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+.contact-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.form-group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.form-field {
+    flex: 1;
+    min-width: 45%; /* Ensures fields take up space properly */
+}
+
+.form-group label {
+    font-size: 1.1rem;
+    color: #362706;
+    display: block;
+    margin-bottom: 1px;
+
+}
+
+.form-group input,
+.form-group textarea {
+    width: 100%;
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    box-sizing: border-box;
+}
+
+.form-group textarea {
+    resize: vertical;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+    border-color: #526D42;
+    outline: none;
+}
+
+.submit-btn {
+    padding: 15px;
+    background-color: #526D42;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    width: 100%;
+    text-align: center;
+    margin-top: 20px;
+}
+
+.submit-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .faq-section,
+    .contact-form-section {
+        padding: 20px;
+        margin: 20px auto;
+    }
+
+    .form-field {
+        min-width: 100%;
+    }
+}
+
+.logout-btn {
+    background-color: red;
+    color: white;
+    font-weight: bold;
+    padding: 10px;
+    display: block;
+    text-align: center;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    margin: 10px 0;
+}
+
+.logout-btn:hover {
+    background-color: darkred;
+}
+
+/* Empty Cart Modal Styles */
+.empty-cart-modal {
+    display: none; /* Hidden by default */
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5); /* Black background with opacity */
+    overflow: auto;
+}
+
+.empty-cart-modal-content {
+    background-color: #f4ecc2;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 400px;
+    border-radius: 8px;
+    text-align: center;
+    position: relative;
+}
+
+.empty-cart-modal-header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #362706;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 8px 8px 0 0;
+    position: relative;
+}
+
+.close-empty-cart-modal {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: white;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close-empty-cart-btn {
+    margin-top: 20px;
+    background-color: #526D42;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 1.1rem;
+}
+
+.close-empty-cart-btn:hover {
+    background-color: #4a5f3b;
+}
+
+
+/* Empty Cart Modal Styles */
+.empty-cart-modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1000; /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    background-color: rgba(0, 0, 0, 0.5); /* Black background with opacity */
+    overflow: auto; /* Enable scroll if needed */
+}
+
+.empty-cart-modal-content {
+    background-color: #f4ecc2;
+    margin: 10% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 400px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.close-empty-cart-modal,
+.close-empty-cart-btn {
+    color: #aaa;
+    font-size: 28px;
+    cursor: pointer;
+}
+
+.close-empty-cart-modal:hover,
+.close-empty-cart-modal:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+
+
+/* Checkout Container */
+
+
+
+
+/* Checkout Container */
+.checkout-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    max-width: 800px;
+    margin: 0 auto;
+    background-color: #f4ecc2;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Checkout Title */
+.checkout-title {
+    font-size: 2.5rem;
+    color: #362706;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+/* Checkout Steps */
+.checkout-step, #deliveryAddress, #paymentDetails {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 30px;
+    padding: 20px;
+    background-color: #e7dcb1;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Hidden Elements */
+.hidden {
+    display: none;
+}
+
+/* Option Buttons */
+.option-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.option-btn, .proceed-btn {
+    padding: 10px 30px;
+    font-size: 1rem;
+    background-color: #B2533E;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.option-btn:hover, .proceed-btn:hover {
+    background-color: #d66b33;
+}
+
+/* Form Fields */
+input[type="text"] {
+    width: 90%;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+/* Checkout Button */
+.checkout-btn {
+    display: inline-block;
+    padding: 12px 30px;
+    background-color: #526D42;
+    color: white;
+    font-size: 1rem;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    margin-top: 20px;
+}
+
+.checkout-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* Confirmation Container */
+.confirmation-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    max-width: 800px;
+    margin: 0 auto;
+    background-color: #f4ecc2;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+/* Order Placed Section */
+.order-placed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.confirmation-icon {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 10px;
+}
+
+/* Order Status Section */
+.order-status {
+    background-color: #362706;
+    padding: 20px;
+    border-radius: 10px;
+    color: white;
+    width: 100%;
+    margin-top: 20px;
+}
+
+.status-steps {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+}
+
+.status-step {
+    text-align: center;
+    flex: 1;
+    margin: 0 10px;
+}
+
+.status-step img {
+    width: 60px;
+    height: 60px;
+    margin-bottom: 10px;
+}
+
+.status-step p {
+    font-size: 0.9rem;
+}
+
+/* Help Section */
+.help-section {
+    margin-top: 30px;
+    text-align: center;
+}
+
+.help-section h3 {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+}
+
+.contact-btn {
+    padding: 10px 20px;
+    background-color: #526D42;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    font-size: 1rem;
+}
+
+.contact-btn:hover {
+    background-color: #4a5f3b;
+}
+
+/* New Orders Page Styles */
+/* Admin Orders Container */
+.admin-orders-container {
+    padding: 40px 80px;
+    max-width: 900px;
+    margin: 0 auto;
+    background-color: #f4ecc2;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+/* Title for Orders Section */
+.orders-title {
+    font-size: 2rem;
+    margin-bottom: 30px;
+    text-align: center;
+    background-color: #526D42;
+    color: white;
+    padding: 10px 0;
+    border-radius: 8px;
+    width: 100%;
+}
+
+/* Placeholder when no orders are present */
+.orders-placeholder {
+    padding: 40px;
+    font-size: 1.2rem;
+    color: #362706;
+    background-color: #e7dcb1;
+    border-radius: 8px;
+    margin-top: 30px;
+}
+
+/* Individual Order Card */
+.order-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: white;
+    padding: 15px 20px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Order Information */
+.order-info {
+    text-align: left;
+    color: #362706;
+}
+
+/* Order Total and Accept Button */
+.order-total {
+    text-align: right;
+}
+
+.order-total span {
+    font-size: 1.2rem;
+    color: #362706;
+    margin-right: 15px;
+}
+
+/* New Orders Page Styles */
+main {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #f4ecc2;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+/* Order Container */
+.order {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+/* Order Header */
+.order-header {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.order-header h3 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #362706;
+}
+
+.order-header p {
+    font-size: 0.9rem;
+    color: #666;
+    margin: 0;
+}
+
+/* Order Details */
+.order-details {
+    margin: 10px 0;
+}
+
+.order-details p {
+    margin: 5px 0;
+    font-size: 1rem;
+    color: #333;
+}
+
+/* Accept Button */
+.accept-btn {
+    background-color: #B2533E;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1rem;
+    align-self: flex-end;
+    transition: background-color 0.3s ease;
+}
+
+.accept-btn:hover {
+    background-color: #d66b33;
+}
+
+
+
+/* Current Orders Page Styles */
+.order {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.order-header {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.order-header h3 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #362706;
+}
+
+.order-header p {
+    font-size: 0.9rem;
+    color: #666;
+    margin: 0;
+}
+
+.order-details {
+    margin: 10px 0;
+}
+
+.order-details p {
+    margin: 5px 0;
+    font-size: 1rem;
+    color: #333;
+}
+
+/* Status Button */
+.status-btn {
+    background-color: #B2533E;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1rem;
+    align-self: flex-end;
+    transition: background-color 0.3s ease;
+}
+
+.status-btn:hover {
+    background-color: #d66b33;
+}
+
+.status-btn:disabled {
+    background-color: #aaa;
+    cursor: not-allowed;
+}
+
+/* Accept Button Styles */
+.accept-btn {
+    background-color: #28a745; /* Green color for accept button */
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s ease;
+}
+
+.accept-btn:hover {
+    background-color: #218838; /* Darker green on hover */
+}
+
+/* Status Button Styles */
+.status-btn {
+    background-color: #007bff; /* Blue color for status buttons */
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s ease;
+    margin-top: 10px;
+}
+
+.status-btn:hover {
+    background-color: #0056b3; /* Darker blue on hover */
+}
+
+test.php:
+<?php
+echo "Hello, World!";
+?>
+
+update_cart.php:
+<?php
+session_start();
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    if (isset($_POST['action'])) {
+        $action = $_POST['action'];
+        $itemName = $_POST['item'];
+        $quantity = intval($_POST['quantity']);
+        $price = isset($_POST['price']) ? floatval($_POST['price']) : 0;
+
+        if ($action === 'add' && !empty($itemName) && $quantity > 0 && $price > 0) {
+            if (!isset($_SESSION['cart'])) {
+                $_SESSION['cart'] = [];
+            }
+
+            if (isset($_SESSION['cart'][$itemName])) {
+                $_SESSION['cart'][$itemName]['quantity'] += $quantity;
+            } else {
+                $_SESSION['cart'][$itemName] = [
+                    'quantity' => $quantity,
+                    'price' => $price,
+                ];
+            }
+
+            echo json_encode(['status' => 'success', 'message' => 'Item added to cart']);
+        } elseif ($action === 'add_custom' && !empty($itemName) && $quantity > 0) {
+            $details = json_decode($_POST['details'], true);
+            if (!isset($_SESSION['cart'])) {
+                $_SESSION['cart'] = [];
+            }
+
+            $customPizzaId = uniqid('custom_pizza_');
+            $_SESSION['cart'][$customPizzaId] = [
+                'quantity' => $quantity,
+                'price' => 11.95, // Adjust the price accordingly
+                'details' => $details,
+            ];
+
+            echo json_encode(['status' => 'success', 'message' => 'Custom pizza added to cart']);
+        } elseif ($action === 'update' && !empty($itemName) && $quantity >= 0) {
+            if ($quantity == 0) {
+                unset($_SESSION['cart'][$itemName]);
+            } else {
+                $_SESSION['cart'][$itemName]['quantity'] = $quantity;
+            }
+
+            echo json_encode(['status' => 'success', 'message' => 'Cart updated successfully']);
+        } else {
+            echo json_encode(['status' => 'error', 'message' => 'Invalid data provided']);
+        }
+    } else {
+        echo json_encode(['status' => 'error', 'message' => 'No action specified']);
+    }
+} else {
+    echo json_encode(['status' => 'error', 'message' => 'Invalid request method']);
+}
+
+update_order_status.php:
+<?php
+include 'db_connection.php'; // Include your DB connection script
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $order_id = $_POST['order_id'];
+    $status = $_POST['status'];
+
+    // Prepare the SQL query to update the order status
+    $stmt = $conn->prepare("UPDATE Orders SET status = ? WHERE id = ?");
+    $stmt->bind_param("si", $status, $order_id);
+
+    if ($stmt->execute()) {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to update order status.']);
+    }
+
+    $stmt->close();
+    $conn->close();
+} else {
+    echo json_encode(['success' => false, 'message' => 'Invalid request.']);
+}
+?>
+
+
